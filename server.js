@@ -93,7 +93,7 @@ async function convert(file, thumbsFolder) {
     {
       src: '', // replaced after
       page: i + 1,
-      thumb: `http://localhost:8888/${thumbsFolder}/${thumbnailName}`,
+      thumb: `${thumbsFolder}/${thumbnailName}`,
       cutBefore: !!split[i],
       data: split[i] ? split[i] : { name: '' },
       remove: false,
