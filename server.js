@@ -15,6 +15,10 @@ const readdir = util.promisify(fs.readdir);
 
 const UPLOADS = 'uploads/';
 
+if (!fs.existsSync(UPLOADS)) {
+  fs.mkdirSync(UPLOADS);
+}
+
 const upload = multer({
   storage: multer.diskStorage({
     destination(req, file, cb) {
