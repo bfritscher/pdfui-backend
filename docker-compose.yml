@@ -1,0 +1,17 @@
+version: '3'
+
+services:
+  redis:
+    image: redis
+    restart: always
+  node:
+    build: .
+    env_file: .env
+    command: npm run start
+    restart: always
+    volumes:
+      - .:/usr/src/app
+    ports:
+      - "8888:80"
+    depends_on:
+      - redis
