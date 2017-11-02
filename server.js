@@ -13,6 +13,11 @@ const utils = require('./utils');
 const mkdir = util.promisify(fs.mkdir);
 const readdir = util.promisify(fs.readdir);
 
+const simpleParser = require('mailparser').simpleParser;
+
+const redis = require('redis');
+const redisMailSubClient = redis.createClient(6379, 'redis');
+
 const UPLOADS = 'uploads/';
 
 if (!fs.existsSync(UPLOADS)) {
@@ -100,6 +105,53 @@ async function convert(file, thumbsFolder) {
       angle: 0,
     }));
 }
+
+function extractAttachments(rawMail) {
+  simpleParser(rawMail)
+  .then(mail => {
+    mail.attachments.filter(attachment => attachment.contentType === 'application/pdf').forEach(attachment => {
+      // TODO: compute thumbsFolder
+      mail.messageId
+      // TODO: write buffer to file
+      attachment.filename
+      attachment.content
+      convert(file, thumbsFolder);
+    });
+  })
+  .catch(err => {
+    console.log(err);
+  });
+}
+
+// TODO: refactor to reconnect to a session (generate json from thumbs?)
+
+// TODO: list emailed files without owner
+
+// TODO: claim emailed files
+
+// TODO: old data cleanup
+
+
+/* Handle e-mail events */
+redisMailSubClient.on('psubscribe', (pattern, count) => {
+  console.log('subscribed to ', pattern, count)
+});
+redisMailSubClient.on('pmessage', (pattern, event, value) => {
+  // ENABLE subscription on redis config set notify-keyspace-events Es$
+  console.log('pmessage', pattern, event, value)
+  redisMailClient.get(value, (err, text) => {
+    if (err) {
+      console.log('redis error', err);
+    }
+    let mail = JSON.parse(text);
+    console.log('[new mail]', mail.date, mail.to, mail.from, mail.subject);
+    extractAttachments(`${mail.raw}${mail.body}`)
+  });
+});
+
+redisMailSubClient.psubscribe('__keyevent@0__:set');
+
+/* ROUTES */
 
 app.post('/upload', upload.single('file'), (req, res) => {
   const thumbsFolder = `${UPLOADS}${req.session.id}/${req.file.filename}_thumbs/`;
