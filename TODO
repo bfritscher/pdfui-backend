@@ -1,8 +1,12 @@
 # TODO
 -> Documentation
--> auto clean session / data
+-> old data cleanup
+-> sync local edits and session data
+-> add pages of file in mail?
 
 # Possible enhancements
 -> resize
 -> add blank page
 -> convert to image?
+-> SSE for mail updates
+-> custom mail adresses

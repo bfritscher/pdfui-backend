@@ -3,6 +3,7 @@ version: '3'
 services:
   redis:
     image: redis
+    command: "redis-server /usr/local/etc/redis/redis.conf"
     volumes:
      - "./redis.conf:/usr/local/etc/redis/redis.conf"
     restart: always

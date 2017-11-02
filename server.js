@@ -12,6 +12,8 @@ const utils = require('./utils');
 
 const mkdir = util.promisify(fs.mkdir);
 const readdir = util.promisify(fs.readdir);
+const mv = util.promisify(require('mv'));
+
 
 const simpleParser = require('mailparser').simpleParser;
 
@@ -63,12 +65,26 @@ app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use('/uploads', express.static(UPLOADS));
 
+function ensureSession(req) {
+  if (!req.session.next) {
+    req.session.next = 65;
+    req.session.fileMapping = {};
+    req.session.pages = [];
+  }
+}
+
+async function ensureThumbsFolder(thumbsFolder) {
+  if (!fs.existsSync(thumbsFolder)) {
+    await mkdir(thumbsFolder);
+  }
+}
+
 const zbarSplitRegex = /num='(\d*?)'[\s\S]*?type='(.*?)' quality='(.*?)'.*?\[CDATA\[(.*?)\]\]/g;
 
-async function scanForSplitCodes(file) {
+async function scanForSplitCodes(filePath) {
   try {
     const splits = [];
-    const { stdout } = await exec(`zbarimg --quiet --xml ${file.path}`);
+    const { stdout } = await exec(`zbarimg --quiet --xml ${filePath}`);
     let matches;
     // eslint-disable-next-line
     while ((matches = zbarSplitRegex.exec(stdout)) !== null) {
@@ -112,28 +128,25 @@ async function loadSplit(thumbsFolder) {
   });
 }
 
-async function convertAndSplit(file, thumbsFolder) {
-  const zbarPromise = scanForSplitCodes(file);
-  if (!fs.existsSync(thumbsFolder)) {
-    await mkdir(thumbsFolder);
-  }
-  await exec(`convert ${file.path} -resize 300x300\\> ${thumbsFolder}/%03d.png`);
+async function convertAndSplit(filePath, thumbsFolder) {
+  const zbarPromise = scanForSplitCodes(filePath);
+  await ensureThumbsFolder(thumbsFolder);
+  await exec(`convert ${filePath} -resize 300x300\\> ${thumbsFolder}/%03d.png`);
   const split = await zbarPromise;
   await saveSplit(split, thumbsFolder);
-}
-
-function ensureSession(req) {
-  if (!req.session.next) {
-    req.session.next = 65;
-    req.session.fileMapping = {};
-    req.session.pages = [];
-  }
 }
 
 async function addFileToSession(filename, thumbsFolder, req) {
   ensureSession(req);
   const split = await loadSplit(thumbsFolder);
   const files = await readdir(thumbsFolder);
+  const sessionThumbsFolder = `${UPLOADS}${req.session.id}/${filename}_thumbs/`;
+  await ensureThumbsFolder(sessionThumbsFolder);
+  if (sessionThumbsFolder !== thumbsFolder) {
+    await mv(thumbsFolder, sessionThumbsFolder);
+    await mv(thumbsFolder.replace('_thumbs/', ''), sessionThumbsFolder.replace('_thumbs/', ''));
+  }
+
   const char = String.fromCharCode(req.session.next);
   req.session.next += 1;
   req.session.fileMapping[char] = filename;
@@ -142,7 +155,7 @@ async function addFileToSession(filename, thumbsFolder, req) {
     {
       src: char,
       page: i + 1,
-      thumb: `${thumbsFolder}${thumbnailName}`,
+      thumb: `${sessionThumbsFolder}${thumbnailName}`,
       cutBefore: !!split[i],
       data: split[i] ? split[i] : { name: `${char}${i}` },
       remove: false,
@@ -158,30 +171,27 @@ function extractAttachments(rawMail) {
   simpleParser(rawMail)
     .then((mail) => {
       mail.attachments.filter(attachment => attachment.contentType === 'application/pdf').forEach((attachment) => {
-      // TODO: compute thumbsFolder
-      /*
-      mail.to;
-      mail.messageId;
-        // TODO: write buffer to file
-        attachment.filename;
-        attachment.content;
-        convert(file, thumbsFolder);
-        */
-        console.log(attachment);
+        const folder = `${UPLOADS}${mail.messageId}`;
+        if (!fs.existsSync(folder)) {
+          fs.mkdirSync(folder);
+        }
+        const thumbsFolder = `${folder}/${attachment.filename}_thumbs/`;
+        const filePath = `${folder}/${attachment.filename}`;
+
+        fs.writeFileSync(filePath, attachment.content);
+        convertAndSplit(filePath, thumbsFolder).then(() => {
+          redisMailClient.sadd(mail.to.value[0].address.split('@')[0], JSON.stringify({
+            thumbsFolder,
+            filename: attachment.filename,
+            date: mail.date,
+          }));
+        });
       });
     })
     .catch((err) => {
-      console.log(err);
+      console.log('Error extracting attachment', err);
     });
 }
-
-// TODO: list emailed files without owner
-
-// TODO: claim emailed files/ access custom folder?
-
-// TODO: old data cleanup
-
-// TODO: session clear
 
 /* Handle e-mail events */
 redisMailSubClient.on('psubscribe', (pattern, count) => {
@@ -209,9 +219,40 @@ app.get('/session', (req, res) => {
   res.json(pages);
 });
 
+app.get('/reset', (req, res) => {
+  req.session.regenerate(() => {
+    res.end();
+  });
+});
+
+app.get('/mail/:to', (req, res) => {
+  redisMailClient.smembers(req.params.to, (err, data) => {
+    if (err) {
+      res.status(500).json(err);
+    } else {
+      res.json(data.map((s) => {
+        const j = JSON.parse(s);
+        j.raw = s;
+        j.to = req.params.to;
+        return j;
+      }));
+    }
+  });
+});
+
+app.post('/claim', (req, res) => {
+  addFileToSession(req.body.filename, req.body.thumbsFolder, req).then((thumbs) => {
+    redisMailClient.srem(req.body.to, req.body.raw);
+    res.send(thumbs);
+  }).catch((e) => {
+    redisMailClient.srem(req.body.to, req.body.raw);
+    res.status(500).json(e);
+  });
+});
+
 app.post('/upload', upload.single('file'), (req, res) => {
   const thumbsFolder = `${UPLOADS}${req.session.id}/${req.file.filename}_thumbs/`;
-  convertAndSplit(req.file, thumbsFolder).then(async () => {
+  convertAndSplit(req.file.path, thumbsFolder).then(async () => {
     const thumbs = await addFileToSession(req.file.filename, thumbsFolder, req);
     res.send(thumbs);
   }).catch((e) => {
