@@ -171,7 +171,7 @@ function extractAttachments(rawMail) {
   simpleParser(rawMail)
     .then((mail) => {
       mail.attachments.filter(attachment => attachment.contentType === 'application/pdf').forEach((attachment) => {
-        const folder = `${UPLOADS}${mail.messageId}`;
+        const folder = `${UPLOADS}${mail.messageId.replace(/[^\w\s]/gi, '')}`;
         if (!fs.existsSync(folder)) {
           fs.mkdirSync(folder);
         }
