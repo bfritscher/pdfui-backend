@@ -140,6 +140,7 @@ async function addFileToSession(filename, thumbsFolder, req) {
   ensureSession(req);
   const split = await loadSplit(thumbsFolder);
   const files = await readdir(thumbsFolder);
+  await ensureThumbsFolder(`${UPLOADS}${req.session.id}`);
   const sessionThumbsFolder = `${UPLOADS}${req.session.id}/${filename}_thumbs/`;
   await ensureThumbsFolder(sessionThumbsFolder);
   if (sessionThumbsFolder !== thumbsFolder) {
