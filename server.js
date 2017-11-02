@@ -16,7 +16,9 @@ const readdir = util.promisify(fs.readdir);
 const simpleParser = require('mailparser').simpleParser;
 
 const redis = require('redis');
+
 const redisMailSubClient = redis.createClient(6379, 'redis');
+const redisMailClient = redis.createClient(6379, 'redis');
 
 const UPLOADS = 'uploads/';
 
@@ -108,44 +110,48 @@ async function convert(file, thumbsFolder) {
 
 function extractAttachments(rawMail) {
   simpleParser(rawMail)
-  .then(mail => {
-    mail.attachments.filter(attachment => attachment.contentType === 'application/pdf').forEach(attachment => {
+    .then((mail) => {
+      mail.attachments.filter(attachment => attachment.contentType === 'application/pdf').forEach((attachment) => {
       // TODO: compute thumbsFolder
-      mail.messageId
-      // TODO: write buffer to file
-      attachment.filename
-      attachment.content
-      convert(file, thumbsFolder);
+      /*
+      mail.to;
+      mail.messageId;
+        // TODO: write buffer to file
+        attachment.filename;
+        attachment.content;
+        convert(file, thumbsFolder);
+        */
+        console.log(attachment);
+      });
+    })
+    .catch((err) => {
+      console.log(err);
     });
-  })
-  .catch(err => {
-    console.log(err);
-  });
 }
 
 // TODO: refactor to reconnect to a session (generate json from thumbs?)
 
 // TODO: list emailed files without owner
 
-// TODO: claim emailed files
+// TODO: claim emailed files/ access custom folder?
 
 // TODO: old data cleanup
 
 
 /* Handle e-mail events */
 redisMailSubClient.on('psubscribe', (pattern, count) => {
-  console.log('subscribed to ', pattern, count)
+  console.log('subscribed to ', pattern, count);
 });
 redisMailSubClient.on('pmessage', (pattern, event, value) => {
   // ENABLE subscription on redis config set notify-keyspace-events Es$
-  console.log('pmessage', pattern, event, value)
+  console.log('pmessage', pattern, event, value);
   redisMailClient.get(value, (err, text) => {
     if (err) {
       console.log('redis error', err);
     }
-    let mail = JSON.parse(text);
+    const mail = JSON.parse(text);
     console.log('[new mail]', mail.date, mail.to, mail.from, mail.subject);
-    extractAttachments(`${mail.raw}${mail.body}`)
+    extractAttachments(`${mail.raw}${mail.body}`);
   });
 });
 
