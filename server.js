@@ -42,22 +42,23 @@ const upload = multer({
 });
 
 const app = express();
-app.use(cors());
+app.use(cors({
+  origin: true,
+  credentials: true,
+}));
 app.use(session({
   secret: process.env.SESSION_SECRET,
   store: new RedisStore({
     host: 'redis',
   }),
-  resave: false,
+  cookie: {
+    secure: false,
+    httpOnly: false,
+  },
+  resave: true,
   saveUninitialized: true,
 }));
-app.use((req, res, next) => {
-  if (!req.session.next) {
-    req.session.next = 65;
-    req.session.fileMapping = {};
-  }
-  next();
-});
+
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use('/uploads', express.static(UPLOADS));
@@ -87,25 +88,70 @@ async function scanForSplitCodes(file) {
   }
 }
 
-async function convert(file, thumbsFolder) {
+async function saveSplit(split, thumbsFolder) {
+  return new Promise((resolve, reject) => {
+    redisMailClient.set(thumbsFolder, JSON.stringify(split), (err, resp) => {
+      if (err) {
+        reject(err);
+      } else {
+        resolve(resp);
+      }
+    });
+  });
+}
+
+async function loadSplit(thumbsFolder) {
+  return new Promise((resolve, reject) => {
+    redisMailClient.get(thumbsFolder, (err, resp) => {
+      if (err || !resp) {
+        reject(err);
+      } else {
+        resolve(JSON.parse(resp));
+      }
+    });
+  });
+}
+
+async function convertAndSplit(file, thumbsFolder) {
   const zbarPromise = scanForSplitCodes(file);
   if (!fs.existsSync(thumbsFolder)) {
     await mkdir(thumbsFolder);
   }
   await exec(`convert ${file.path} -resize 300x300\\> ${thumbsFolder}/%03d.png`);
-  const files = await readdir(thumbsFolder);
   const split = await zbarPromise;
+  await saveSplit(split, thumbsFolder);
+}
 
-  return files.map((thumbnailName, i) => (
+function ensureSession(req) {
+  if (!req.session.next) {
+    req.session.next = 65;
+    req.session.fileMapping = {};
+    req.session.pages = [];
+  }
+}
+
+async function addFileToSession(filename, thumbsFolder, req) {
+  ensureSession(req);
+  const split = await loadSplit(thumbsFolder);
+  const files = await readdir(thumbsFolder);
+  const char = String.fromCharCode(req.session.next);
+  req.session.next += 1;
+  req.session.fileMapping[char] = filename;
+
+  const thumbs = files.map((thumbnailName, i) => (
     {
-      src: '', // replaced after
+      src: char,
       page: i + 1,
-      thumb: `${thumbsFolder}/${thumbnailName}`,
+      thumb: `${thumbsFolder}${thumbnailName}`,
       cutBefore: !!split[i],
-      data: split[i] ? split[i] : { name: '' },
+      data: split[i] ? split[i] : { name: `${char}${i}` },
       remove: false,
       angle: 0,
-    }));
+    }
+  ));
+  req.session.pages = req.session.pages.concat(thumbs);
+  req.session.save();
+  return thumbs;
 }
 
 function extractAttachments(rawMail) {
@@ -129,14 +175,13 @@ function extractAttachments(rawMail) {
     });
 }
 
-// TODO: refactor to reconnect to a session (generate json from thumbs?)
-
 // TODO: list emailed files without owner
 
 // TODO: claim emailed files/ access custom folder?
 
 // TODO: old data cleanup
 
+// TODO: session clear
 
 /* Handle e-mail events */
 redisMailSubClient.on('psubscribe', (pattern, count) => {
@@ -159,20 +204,15 @@ redisMailSubClient.psubscribe('__keyevent@0__:set');
 
 /* ROUTES */
 
+app.get('/session', (req, res) => {
+  const pages = req.session.pages || [];
+  res.json(pages);
+});
+
 app.post('/upload', upload.single('file'), (req, res) => {
   const thumbsFolder = `${UPLOADS}${req.session.id}/${req.file.filename}_thumbs/`;
-  convert(req.file, thumbsFolder).then((thumbs) => {
-    const char = String.fromCharCode(req.session.next);
-    req.session.next += 1;
-    req.session.fileMapping[char] = req.file.filename;
-    thumbs.forEach((file, i) => {
-      // eslint-disable-next-line
-      file.src = char;
-      if (!file.data.name) {
-        // eslint-disable-next-line
-        file.data.name = `${char}${i}`;
-      }
-    });
+  convertAndSplit(req.file, thumbsFolder).then(async () => {
+    const thumbs = await addFileToSession(req.file.filename, thumbsFolder, req);
     res.send(thumbs);
   }).catch((e) => {
     res.status(500).send(e.message);
