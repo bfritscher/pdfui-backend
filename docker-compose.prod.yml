@@ -17,14 +17,12 @@ services:
       - redis
     restart: always
   node:
-    build: .
+    image: bfritscher/pdfui-backend
     env_file: .env
     command: npm run start
     restart: always
-    volumes:
-      - .:/usr/src/app
     ports:
-      - "8888:80"
+      - "127.0.0.1:8081:80"
     depends_on:
       - redis
       - guerrilla
