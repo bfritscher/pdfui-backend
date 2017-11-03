@@ -9,13 +9,15 @@ const session = require('express-session');
 require('express-zip');
 const RedisStore = require('connect-redis')(session);
 const utils = require('./utils');
+const SSE = require('express-sse');
 
 const mkdir = util.promisify(fs.mkdir);
 const readdir = util.promisify(fs.readdir);
 const mv = util.promisify(require('mv'));
 
-
 const simpleParser = require('mailparser').simpleParser;
+
+const sse = new SSE();
 
 const redis = require('redis');
 
@@ -181,11 +183,15 @@ function extractAttachments(rawMail) {
 
         fs.writeFileSync(filePath, attachment.content);
         convertAndSplit(filePath, thumbsFolder).then(() => {
-          redisMailClient.sadd(mail.to.value[0].address.split('@')[0], JSON.stringify({
+          const to = mail.to.value[0].address.split('@')[0];
+          const file = {
             thumbsFolder,
             filename: attachment.filename,
             date: mail.date,
-          }));
+          };
+          redisMailClient.sadd(to, JSON.stringify(file), () => {
+            sse.send(file, to);
+          });
         });
       });
     })
@@ -240,6 +246,8 @@ app.get('/mail/:to', (req, res) => {
     }
   });
 });
+
+app.get('/stream', sse.init);
 
 app.post('/claim', (req, res) => {
   addFileToSession(req.body.filename, req.body.thumbsFolder, req).then((thumbs) => {
