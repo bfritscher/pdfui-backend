@@ -106,6 +106,32 @@ async function scanForSplitCodes(filePath) {
   }
 }
 
+const bookmarksRegex = /BookmarkBegin\nBookmarkTitle: (.*?)\nBookmarkLevel: (\d+)\nBookmarkPageNumber: (\d+)/g;
+
+async function scanForSplitBookmarks(filePath) {
+  try {
+    const splits = [];
+    const { stdout } = await exec(`pdftk ${filePath} dump_data_utf8`);
+    let matches;
+    // eslint-disable-next-line
+    while ((matches = bookmarksRegex.exec(stdout)) !== null) {
+      // This is necessary to avoid infinite loops with zero-width matches
+      if (matches.index === bookmarksRegex.lastIndex) {
+        bookmarksRegex.lastIndex += 1;
+      }
+      // 0 index but pdftk starts at page 1
+      splits[matches[3] - 1] = {
+        type: 'bookmark',
+        level: matches[2],
+        name: matches[1],
+      };
+    }
+    return splits;
+  } catch (e) {
+    return [];
+  }
+}
+
 async function saveSplit(split, thumbsFolder) {
   return new Promise((resolve, reject) => {
     redisMailClient.set(thumbsFolder, JSON.stringify(split), (err, resp) => {
@@ -132,9 +158,11 @@ async function loadSplit(thumbsFolder) {
 
 async function convertAndSplit(filePath, thumbsFolder) {
   const zbarPromise = scanForSplitCodes(filePath);
+  const bookmarksPromise = scanForSplitBookmarks(filePath);
   await ensureThumbsFolder(thumbsFolder);
   await exec(`convert ${filePath} -resize 300x300\\> ${thumbsFolder}/%03d.png`);
   const split = await zbarPromise;
+  Object.assign(split, await bookmarksPromise);
   await saveSplit(split, thumbsFolder);
 }
 
