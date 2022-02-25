@@ -23,6 +23,7 @@ const redis = require('redis');
 
 const redisMailSubClient = redis.createClient(6379, 'redis');
 const redisMailClient = redis.createClient(6379, 'redis');
+const redisSessionClient = redis.createClient(6379, 'redis');
 
 const UPLOADS = 'uploads/';
 
@@ -53,7 +54,7 @@ app.use(cors({
 app.use(session({
   secret: process.env.SESSION_SECRET,
   store: new RedisStore({
-    host: 'redis',
+    client: redisSessionClient
   }),
   cookie: {
     secure: false,
